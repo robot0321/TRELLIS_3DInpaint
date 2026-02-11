@@ -1,3 +1,5 @@
+import os 
+import imageio
 import torch
 import numpy as np
 from tqdm import tqdm
@@ -118,3 +120,53 @@ def render_snapshot(samples, resolution=512, bg_color=(0, 0, 0), offset=(-16 / 1
     pitch = [offset[1] for _ in range(4)]
     extrinsics, intrinsics = yaw_pitch_r_fov_to_extrinsics_intrinsics(yaw, pitch, r, fov)
     return render_frames(samples, extrinsics, intrinsics, {'resolution': resolution, 'bg_color': bg_color}, **kwargs)
+
+
+def render_snapshot_yaw_pitch(samples, resolution=512, bg_color=(255,255,255), yaw=[-16/180*np.pi], pitch=[20/180*np.pi], r=28, fov=2, **kwargs):
+    extrinsics, intrinsics = yaw_pitch_r_fov_to_extrinsics_intrinsics(yaw, pitch, r, fov)
+    return render_frames(samples, extrinsics, intrinsics, {'resolution': resolution, 'bg_color': bg_color}, **kwargs)
+
+def save_outputs(outputs, basedir, formats, tag=""):
+    outdir = os.path.join(basedir, tag)
+    os.makedirs(outdir, exist_ok=True)
+    # Render the outputs
+    
+    if 'gaussian' in formats:
+        total_view = render_snapshot_yaw_pitch(outputs['gaussian'][0], resolution=1024, yaw=[270/180*np.pi, 90/180*np.pi, 180/180*np.pi], pitch=[90/180*np.pi, 0*np.pi, 0*np.pi], r=28, fov=2)['color']
+        # for i in range(len(top_view)):
+        for i in range(len(total_view)):
+            imageio.imwrite(os.path.join(outdir, f"sample_gs_view{i}.png"), total_view[i])
+    
+        # whole scene
+        video = render_video(outputs['gaussian'][0])['color']
+        imageio.mimsave(os.path.join(outdir, f"sample_gs.mp4"), video, fps=30)
+        # outputs['gaussian'][0].save_ply(outdir+f"sample.ply") # Save Gaussians as PLY files
+        # each cube
+        for i in range(1,len(outputs['gaussian'])):
+            video = render_video(outputs['gaussian'][i])['color']
+            imageio.mimsave(os.path.join(outdir, f"sample_gs{i}.mp4"), video, fps=30)
+            # outputs['gaussian'][i].save_ply(outdir+f"sample{i}.ply") # Save Gaussians as PLY files
+
+    if 'radiance_field' in formats:
+        video = render_video(outputs['radiance_field'][0])['color']
+        imageio.mimsave(os.path.join(outdir, "sample_rf.mp4"), video, fps=30)
+
+    if 'mesh' in formats:
+        video = render_video(outputs['mesh'][0])['normal']
+        imageio.mimsave(os.path.join(outdir, "sample_mesh.mp4"), video, fps=30)
+        
+    if 'gaussian' in formats and 'mesh' in formats:
+        from . import postprocessing_utils
+        # GLB files can be extracted from the outputs
+        glb = postprocessing_utils.to_glb(
+            outputs['gaussian'][0],
+            outputs['mesh'][0],
+            # Optional parameters
+            simplify=0.95,          # Ratio of triangles to remove in the simplification process
+            texture_size=1024,      # Size of the texture used for the GLB
+        )
+        glb.export(os.path.join(outdir, "sample.glb"))
+        
+    return 0
+
+
