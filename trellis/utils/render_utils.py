@@ -122,9 +122,32 @@ def render_snapshot(samples, resolution=512, bg_color=(0, 0, 0), offset=(-16 / 1
     return render_frames(samples, extrinsics, intrinsics, {'resolution': resolution, 'bg_color': bg_color}, **kwargs)
 
 
-def render_snapshot_yaw_pitch(samples, resolution=512, bg_color=(255,255,255), yaw=[-16/180*np.pi], pitch=[20/180*np.pi], r=28, fov=2, **kwargs):
+def render_snapshot_yaw_pitch(samples, resolution=512, bg_color=(0,0,0), yaw=[-16/180*np.pi], pitch=[20/180*np.pi], r=2, fov=40, **kwargs):
     extrinsics, intrinsics = yaw_pitch_r_fov_to_extrinsics_intrinsics(yaw, pitch, r, fov)
     return render_frames(samples, extrinsics, intrinsics, {'resolution': resolution, 'bg_color': bg_color}, **kwargs)
+
+
+def save_gaussian_through_iter(outputs, outdir):
+    os.makedirs(outdir, exist_ok=True)
+    # Render the outputs
+    videolist = []
+    num_frames = 300
+    for i, out in enumerate(outputs):
+        video = np.concatenate([render_video(out['gaussian'][0], num_frames=num_frames)['color']], axis=0)
+        videolist.append(video)
+        imageio.mimsave(os.path.join(outdir, f"video_iter{i}.mp4"), video, fps=30)
+        # out['gaussian'][0].save_ply(outdir+f"sample.ply") # Save Gaussians as PLY files
+        
+    idxlist = np.array_split(np.arange(num_frames), len(outputs))
+    full_video = np.concatenate([videolist[i][idxlist[i]] for i in range(len(outputs))], axis=0)
+    # import pdb; pdb.set_trace()
+    imageio.mimsave(os.path.join(outdir, f"optimizevideo_throughiter{len(outputs)}.mp4"), full_video, fps=30)
+
+def save_comparison_view(outputs, outdir):
+    os.makedirs(outdir, exist_ok=True)
+    for i, out in enumerate(outputs):
+        total_view = render_snapshot_yaw_pitch(out['gaussian'][0], resolution=512, bg_color=(0,0,0), yaw=[60/180*np.pi], pitch=[30/180*np.pi], r=2, fov=40, verbose=False)['color']
+        imageio.imwrite(os.path.join(outdir, f"view_slat{i}.png" if len(outputs)>1 else f"view.png"), total_view[0])
 
 def save_outputs(outputs, basedir, formats, tag=""):
     outdir = os.path.join(basedir, tag)
@@ -132,20 +155,17 @@ def save_outputs(outputs, basedir, formats, tag=""):
     # Render the outputs
     
     if 'gaussian' in formats:
-        total_view = render_snapshot_yaw_pitch(outputs['gaussian'][0], resolution=1024, yaw=[270/180*np.pi, 90/180*np.pi, 180/180*np.pi], pitch=[90/180*np.pi, 0*np.pi, 0*np.pi], r=28, fov=2)['color']
-        # for i in range(len(top_view)):
+        # snapshot rendering
+        total_view = render_snapshot_yaw_pitch(outputs['gaussian'][0], resolution=512, bg_color=(0,0,0), yaw=[270/180*np.pi, 90/180*np.pi, 0/180*np.pi, 45/180*np.pi], pitch=[90/180*np.pi, 0*np.pi, 0*np.pi, 30/180*np.pi], r=2, fov=40)['color']
         for i in range(len(total_view)):
             imageio.imwrite(os.path.join(outdir, f"sample_gs_view{i}.png"), total_view[i])
     
-        # whole scene
+        # whole scene video
         video = render_video(outputs['gaussian'][0])['color']
         imageio.mimsave(os.path.join(outdir, f"sample_gs.mp4"), video, fps=30)
-        # outputs['gaussian'][0].save_ply(outdir+f"sample.ply") # Save Gaussians as PLY files
-        # each cube
-        for i in range(1,len(outputs['gaussian'])):
-            video = render_video(outputs['gaussian'][i])['color']
-            imageio.mimsave(os.path.join(outdir, f"sample_gs{i}.mp4"), video, fps=30)
-            # outputs['gaussian'][i].save_ply(outdir+f"sample{i}.ply") # Save Gaussians as PLY files
+        
+        # Save Gaussians as PLY files
+        outputs['gaussian'][0].save_ply(outdir+f"sample.ply") 
 
     if 'radiance_field' in formats:
         video = render_video(outputs['radiance_field'][0])['color']

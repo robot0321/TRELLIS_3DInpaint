@@ -1,8 +1,61 @@
 import torch
+import numpy as np
+from scipy.spatial import cKDTree
+
+def get_keepidx(xyz, mask):
+    assert mask.ndim==3 and len(set(mask.shape[-3:])) # same H,W,D reso
+    reso=mask.shape[-1]
+    out_idx=torch.floor(xyz*reso).long().clamp(0,reso-1)
+    ix,iy,iz=out_idx.unbind(dim=-1)
+    return (mask[ix,iy,iz]<0.5)
+
 def evaluate_inpainting(base_slat, inpaint_slat, inpaint_mask):
     geometry_metrics = compute_geometry_metrics(base_slat, inpaint_slat, inpaint_mask)
     appearance_metrics = compute_appearance_metrics(base_slat, inpaint_slat, inpaint_mask)
     return {**geometry_metrics, **appearance_metrics}
+
+
+def compute_iou_and_dice(occA, occB):
+    # iou/dice in grid
+    # occA, occB: boolean tensor (B,1,H,W,D)
+    assert occA.shape == occB.shape, "Occupancy tensors must have the same shape."
+    assert occA.dtype == torch.bool and occB.dtype == torch.bool, "Occupancy tensors must be boolean."
+    inter = torch.logical_and(occA, occB).sum()
+    union = torch.logical_or(occA, occB).sum()
+    iou = inter / (union + 1e-8)
+    dice = 2 * inter / (occA.sum() + occB.sum() + 1e-8)
+    return iou, dice
+
+def compare_geo_color(
+    xyzA, rgbA, xyzB, rgbB, 
+    tau_list=[0.005, 0.01, 0.02]
+):
+    xyzA, rgbA = np.asarray(xyzA), np.asarray(rgbA)
+    xyzB, rgbB = np.asarray(xyzB), np.asarray(rgbB)
+    treeA = cKDTree(xyzA)
+    treeB = cKDTree(xyzB)
+
+    dA, idxA = treeB.query(xyzA, k=1, workers=-1)
+    dB, idxB = treeA.query(xyzB, k=1, workers=-1)
+
+    results = {}
+    for tau in tau_list:
+        P = np.mean(dB < tau)   # Precision
+        R = np.mean(dA < tau)   # Recall
+        F = 0 if (P+R)==0 else 2*P*R/(P+R)
+        results[f"F@{tau}"] = F
+
+    # Color error on geometry matches (A->B + B->A)
+    maskA = (dA < tau_list[-1])
+    maskB = (dB < tau_list[-1])
+
+    col_err_A = np.linalg.norm(rgbA[maskA] - rgbB[idxA[maskA]], axis=1)
+    col_err_B = np.linalg.norm(rgbB[maskB] - rgbA[idxB[maskB]], axis=1)
+
+    results["color_mean"]   = np.mean(np.concatenate([col_err_A, col_err_B]))
+    results["color_median"] = np.median(np.concatenate([col_err_A, col_err_B]))
+
+    return results
 
 def compute_geometry_metrics(base_slat, inpaint_slat, inpaint_mask):
     """

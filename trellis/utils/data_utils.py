@@ -224,3 +224,29 @@ class BalancedResumableSampler(ResumableSampler):
         indices = balanced_indices[self.idx:]
 
         return iter(indices)
+
+
+from plyfile import PlyData
+def load_gsply(path, transform=[[1, 0, 0], [0, 0, -1], [0, 1, 0]]):
+    plydata = PlyData.read(path)
+    
+    xyz = np.stack((np.asarray(plydata.elements[0]["x"]), np.asarray(plydata.elements[0]["y"]), np.asarray(plydata.elements[0]["z"])), axis=1)
+    opacities = np.asarray(plydata.elements[0]["opacity"])[..., np.newaxis]
+    features_dc = np.zeros((xyz.shape[0], 3))
+    features_dc[:, 0] = np.asarray(plydata.elements[0]["f_dc_0"])
+    features_dc[:, 1] = np.asarray(plydata.elements[0]["f_dc_1"])
+    features_dc[:, 2] = np.asarray(plydata.elements[0]["f_dc_2"])
+    
+    if transform is not None:
+        transform = np.array(transform)
+        xyz = np.matmul(xyz, transform)
+    
+    xyz = torch.tensor(xyz, dtype=torch.float)
+    features_dc = torch.tensor(features_dc, dtype=torch.float).contiguous()
+    opacities = torch.sigmoid(torch.tensor(opacities, dtype=torch.float))
+    
+    C0 = 0.28209479177387814
+    rgb = features_dc * C0 + 0.5
+    rgb = rgb.clamp(0.0, 1.0)
+    
+    return  {'xyz': xyz, 'rgb': rgb, 'op':opacities}
