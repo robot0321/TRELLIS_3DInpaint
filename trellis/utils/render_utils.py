@@ -146,8 +146,8 @@ def save_gaussian_through_iter(outputs, outdir):
 def save_comparison_view(outputs, outdir):
     os.makedirs(outdir, exist_ok=True)
     for i, out in enumerate(outputs):
-        total_view = render_snapshot_yaw_pitch(out['gaussian'][0], resolution=512, bg_color=(0,0,0), yaw=[60/180*np.pi], pitch=[30/180*np.pi], r=2, fov=40, verbose=False)['color']
-        imageio.imwrite(os.path.join(outdir, f"view_slat{i}.png" if len(outputs)>1 else f"view.png"), total_view[0])
+        total_view = render_snapshot_yaw_pitch(out['gaussian'][0], resolution=512, bg_color=(0,0,0), yaw=[90/180*np.pi], pitch=[30/180*np.pi], r=2, fov=40, verbose=False)['color']
+        imageio.imwrite(os.path.join(outdir, f"iter{i}.png" if len(outputs)>1 else f"base.png"), total_view[0])
 
 def save_outputs(outputs, basedir, formats, tag=""):
     outdir = os.path.join(basedir, tag)

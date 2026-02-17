@@ -186,6 +186,7 @@ class TrellisTextTo3DPipeline(Pipeline):
 
         count = mask_s.sum(dim=(-3,-2,-1), keepdim=True)
         max_iter = optmizer_params['max_iter']
+        max_iou = 0
         for i in range(max_iter):
             noise_spatial = torch.fft.irfftn(noise_optim_target, s=noise.shape[-3:], dim=(-3, -2, -1))
             noise_combined = noise_spatial * mask_s + noise_original * (1 - mask_s)
@@ -209,7 +210,14 @@ class TrellisTextTo3DPipeline(Pipeline):
                 
                 # Decode occupancy latent
                 occ = decoder(z_s*mask_s)>0
-                coords = torch.argwhere(occ)[:, [0, 2, 3, 4]].int()
+                iou, dice = compute_iou_and_dice(target_occ, occ)
+
+                if iou > max_iou:
+                    max_iou = iou
+                    best_noise_spatial = noise_spatial.clone().detach()
+
+                # if optmizer_params['verbose']:
+                coords = torch.argwhere(decoder(z_s)>0)[:, [0, 2, 3, 4]].int()
                 coords_list.append(coords)     
 
             # compute z_s_0_hat with gradients
@@ -229,12 +237,12 @@ class TrellisTextTo3DPipeline(Pipeline):
             optimizer.step()
             
             if optmizer_params['verbose']:
-                iou, dice = compute_iou_and_dice(target_occ, occ)
                 print(f"iter{i} / iou: {iou:.3f}, dice: {dice:.3f}, loss: {loss.item():.6f}")
-                coords_list.append(coords)
 
-        noise_spatial = torch.fft.irfftn(noise_optim_target, s=noise.shape[-3:], dim=(-3, -2, -1))
-        noise_spatial_final = noise_spatial * mask_s + noise_original * (1 - mask_s)
+        # noise_spatial = torch.fft.irfftn(noise_optim_target, s=noise.shape[-3:], dim=(-3, -2, -1))
+        # noise_spatial_final = noise_spatial * mask_s + noise_original * (1 - mask_s)
+        ### use the best noise_spatial during optimization
+        noise_spatial_final = best_noise_spatial * mask_s + noise_original * (1 - mask_s)
         with torch.no_grad():
             z_s = self.sparse_structure_sampler.sample(flow_model, noise_spatial_final, **cond, **sampler_params, verbose=False).samples
             z_s_list.append(z_s)
@@ -302,6 +310,39 @@ class TrellisTextTo3DPipeline(Pipeline):
         slat = slat * std + mean
         
         return slat
+
+    def init_geo_slat(
+        self,
+        cond: dict,
+        coords_list: List[torch.Tensor],
+        sampler_params: dict = {},
+    ) -> sp.SparseTensor:
+        """
+        Initialize the geo_slat for visualization.
+        
+        Args:
+            cond (dict): The conditioning information.
+            coords_list (List[torch.Tensor]): The list of coordinates of the sparse structure.
+            sampler_params (dict): Additional parameters for the sampler.
+        """
+        # Sample structured latent
+        flow_model = self.models['slat_flow_model']
+        
+        geo_slat_list = []
+        for coords in coords_list:
+            noise = sp.SparseTensor(
+                feats=torch.zeros((coords.shape[0], flow_model.in_channels), device=self.device),
+                coords=coords,
+            )
+            sampler_params = {**self.slat_sampler_params, **sampler_params}
+            slat = self.slat_sampler.sample(flow_model,noise,**cond,**sampler_params,verbose=False).samples
+
+            std = torch.tensor(self.slat_normalization['std'])[None].to(slat.device)
+            mean = torch.tensor(self.slat_normalization['mean'])[None].to(slat.device)
+            slat = slat * std + mean
+            geo_slat_list.append(slat)
+        
+        return geo_slat_list
 
     def optimize_initnoise_slat(
         self,
@@ -403,7 +444,6 @@ class TrellisTextTo3DPipeline(Pipeline):
                         print(f"iter{i}/loss:{loss.item():.6f}/"+"/".join([f"{k}:{v:.4f}" for k, v in slat_metric.items()]))
                         
                         
-                
                 ### final
                 noise_feats = noise_feats_spatial*valid[:,None] + noise_feats_original*(~valid[:,None])
         
@@ -416,8 +456,7 @@ class TrellisTextTo3DPipeline(Pipeline):
         #     std = torch.tensor(self.slat_normalization['std'])[None].to(slat.device)
         #     mean = torch.tensor(self.slat_normalization['mean'])[None].to(slat.device)
         #     slat_list[i] = slat * std + mean
-        
-        
+
         return slat_list
 
 
@@ -484,13 +523,22 @@ class TrellisTextTo3DPipeline(Pipeline):
 
         base_slat = sp.SparseTensor(feats=base_slat.feats, coords=base_slat.coords)
         slat_list = self.optimize_initnoise_slat(cond, coords_list[-1], base_slat, inpaint_mask, slat_sampler_params, slat_optimizer_params) 
+        # if sparse_structure_optmizer_params['verbose']:
+        geo_slat_list = self.init_geo_slat(cond, coords_list, slat_sampler_params)
 
-        output_list = []
+        output_list, geo_output_list = [], []
         with torch.no_grad():
             for slat in slat_list:
                 output_list.append(self.decode_slat(slat, formats))
+
+            # if sparse_structure_optmizer_params['verbose']:
+            for geo_slat in geo_slat_list:
+                geo_output_list.append(self.decode_slat(geo_slat, ['gaussian']))
+
+        ## geo_slat_list for visualzation
         
-        return output_list, (z_s_list[-1], slat_list[-1])
+        
+        return output_list, geo_output_list, (z_s_list[-1], slat_list[-1])
     
     def voxelize(self, mesh: o3d.geometry.TriangleMesh) -> torch.Tensor:
         """

@@ -1,6 +1,8 @@
 #!/bin/bash
-BASE_PROMPT="Trees on the grass"
-INPAINT_PROMPT="A red roof house"
+BASE_PROMPT=$1 #"Trees on the grass"
+INPAINT_PROMPT=$2 #"A red roof house"
+echo "Base prompt: $BASE_PROMPT"
+echo "Inpaint prompt: $INPAINT_PROMPT"
 INPAINT_MASK="mask_preset/righthalf.pt"
 
 gpus=(0 1 2 3)
@@ -19,7 +21,7 @@ for i in "${!seeds[@]}"; do
                 --inpaint_mask "$INPAINT_MASK" \
                 --seed $seed \
                 --seed_inpaint $inp_seed \
-                --tag "test_draft" 
+                --tag "test_draft1"
         done     
     ) &
 done

@@ -23,6 +23,10 @@ parser.add_argument("--seed_inpaint", type=int, default=1, help="Random seed for
 parser.add_argument("--steps_inpaint", type=int, default=12, help="Number of steps for the inpainting sampler")
 parser.add_argument("--cfg_ss_inpaint", type=float, default=7.5, help="Classifier-free guidance strength for sparse structure sampler in inpainting")
 parser.add_argument("--cfg_slat_inpaint", type=float, default=7.5, help="Classifier-free guidance strength for SLAT sampler in inpainting")
+parser.add_argument("--ss_lr", type=float, default=3.0, help="Learning rate for optimizing sparse structure during inpainting")
+parser.add_argument("--slat_lr", type=float, default=0.01, help="Learning rate for optimizing slat during inpainting")
+parser.add_argument("--ss_max_iter", type=int, default=15, help="Max iterations for optimizing sparse structure during inpainting")
+parser.add_argument("--slat_max_iter", type=int, default=15, help="Max iterations for optimizing slat during inpainting")
 parser.add_argument("--formats", nargs="+", type=str, choices=["gaussian", "radiance_field", "mesh"], default=['gaussian', 'radiance_field'], help="Formats to generate")
 parser.add_argument("--tag", type=str, default="default", help="Additional tag for the output directory")
 parser.add_argument("--run_base_again", action='store_true', help="Whether to run the base generation again even if outputs already exist")
@@ -82,7 +86,7 @@ else:
 inpaintdir = os.path.join(basedir, f"inpaint/{args.inpaint_prompt.replace(' ', '')}/seed{args.seed_inpaint}_steps{args.steps_inpaint}_cfgss{args.cfg_ss_inpaint}_cfgslat{args.cfg_slat_inpaint}")
 os.makedirs(inpaintdir, exist_ok=True)
 
-inpaint_output, (inpaint_z, inpaint_slat) = pipeline.inpaint(
+inpaint_output, inpaint_geometry_output, (inpaint_z, inpaint_slat) = pipeline.inpaint(
     args.inpaint_prompt,
     base_z,
     base_slat,
@@ -93,8 +97,8 @@ inpaint_output, (inpaint_z, inpaint_slat) = pipeline.inpaint(
         "cfg_strength": args.cfg_ss_inpaint,
     },
     sparse_structure_optmizer_params={
-        "lr": 10.0,
-        "max_iter": 10,
+        "lr": args.ss_lr,
+        "max_iter": args.ss_max_iter,
         "verbose": args.verbose,
     },
     slat_sampler_params={
@@ -102,8 +106,8 @@ inpaint_output, (inpaint_z, inpaint_slat) = pipeline.inpaint(
         "cfg_strength": args.cfg_slat_inpaint,
     },
     slat_optimizer_params={
-        "lr": 0.01,
-        "max_iter": 15,
+        "lr": args.slat_lr,
+        "max_iter": args.slat_max_iter,
         "verbose": args.verbose,
     },
     formats=args.formats,
@@ -112,7 +116,8 @@ inpaint_output, (inpaint_z, inpaint_slat) = pipeline.inpaint(
 torch.save(inpaint_z, os.path.join(inpaintdir, f"inpaint_z.pt"))
 torch.save(inpaint_slat, os.path.join(inpaintdir, f"inpaint_slat.pt"))
 render_utils.save_outputs(inpaint_output[-1], inpaintdir, args.formats)
-render_utils.save_comparison_view(inpaint_output, os.path.join(inpaintdir,"view0"))
+render_utils.save_comparison_view(inpaint_output, os.path.join(inpaintdir,"view0_optslat"))
+render_utils.save_comparison_view(inpaint_geometry_output, os.path.join(inpaintdir,"view0_optss"))
 
 if 'gaussian' in args.formats:
     render_utils.save_gaussian_through_iter(inpaint_output, os.path.join(inpaintdir,"videos"))
@@ -124,12 +129,23 @@ imageio.mimwrite(os.path.join(inpaintdir,"video_comparison_gs.mp4"), np.concaten
 
 
 ### concatenate video in view0 for easy comparison
-base_view = imageio.v3.imread(os.path.join(basedir,"view.png"))
-out_vid = []
+base_view = imageio.v3.imread(os.path.join(basedir,"base.png"))
+optslat_vid = []
 for i in range(len(inpaint_output)):
-    inp_view = imageio.v3.imread(os.path.join(inpaintdir,"view0",f"view_slat{i}.png"))
-    out_vid.append(np.concatenate((base_view, inp_view), axis=1))
-imageio.mimwrite(os.path.join(inpaintdir,"view0_comparison_gs.mp4"), np.stack(out_vid, axis=0), fps=3)
+    optslat_vid.append(imageio.v3.imread(os.path.join(inpaintdir,"view0_optslat",f"iter{i}.png")))
+optslat_vid = np.stack(optslat_vid, axis=0)
+imageio.mimwrite(os.path.join(inpaintdir,"view0_optslat","view0_optslat.mp4"), optslat_vid, fps=args.slat_max_iter/5)
+imageio.mimwrite(os.path.join(inpaintdir,"view0_optslat_comparison.mp4"), np.concatenate((base_view[None].repeat(len(optslat_vid), axis=0), optslat_vid), axis=2), fps=args.slat_max_iter/5)
+
+# if args.verbose:
+optss_vid = []
+for i in range(len(inpaint_geometry_output)):
+    optss_vid.append(imageio.v3.imread(os.path.join(inpaintdir,"view0_optss",f"iter{i}.png")))
+optss_vid = np.stack(optss_vid, axis=0)
+imageio.mimwrite(os.path.join(inpaintdir,"view0_optss","view0_optss.mp4"), optss_vid, fps=args.ss_max_iter/5)
+imageio.mimwrite(os.path.join(inpaintdir,"view0_optss_comparison.mp4"), np.concatenate((base_view[None].repeat(len(optss_vid), axis=0), optss_vid), axis=2), fps=args.ss_max_iter/5)
+
+
 
 ### load
 from trellis.utils.data_utils import load_gsply

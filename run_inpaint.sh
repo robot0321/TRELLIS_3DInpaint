@@ -9,11 +9,11 @@ CUDA_VISIBLE_DEVICES=$GPU python example_inpaint.py \
     --base_prompt "$BASE_PROMPT" \
     --inpaint_prompt "$INPAINT_PROMPT" \
     --inpaint_mask "$INPAINT_MASK" \
-    --seed 3 \
+    --seed 1 \
     --steps 12 \
-    --seed_inpaint 1 \
+    --seed_inpaint 2 \
     --steps_inpaint 12 \
-    --tag "test_draft" \
+    --tag "test_draft1" \
     --verbose
 
 
