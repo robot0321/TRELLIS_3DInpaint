@@ -1,5 +1,13 @@
 # TRELLIS 3D Optinit
 
+* TRELLIS 기본 설치
+* 기본 돌리는 코드는 `example_optinit.py` 보면 됌
+* toys4k 돌리는 코드는 example_toys4k.py인데, 비교 방법들이랑 전부 돌리는 코드라 일단은 example_optinit.py에서 작업하면 될 듯
+* toys4k 데이터는 selene:/home/chung/workspace/TRELLIS_3DInpaint/datasets에 있는데, nfs에서 당겨서 쓰는거라 사용하는 서버에서 nfs 마운트 해서 쓰면 될 듯
+* 아래 내용은 무시 
+
+---
+
 ## TOODs
 ### System
 1. [v] Implement save/load Gaussian outputs (example_optinit.py)
