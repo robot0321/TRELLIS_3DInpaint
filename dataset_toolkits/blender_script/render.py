@@ -33,6 +33,44 @@ EXT = {
     'TARGA': 'tga'
 }
 
+def _configure_cycles_devices() -> str:
+    """Selects the best available Cycles compute backend and enables GPU devices."""
+    cycles_prefs = bpy.context.preferences.addons['cycles'].preferences
+    cycles_prefs.get_devices()
+
+    backend_order = ['OPTIX', 'CUDA', 'HIP', 'METAL', 'ONEAPI']
+    selected_backend = 'NONE'
+    selected_gpu_count = 0
+
+    for backend in backend_order:
+        try:
+            cycles_prefs.compute_device_type = backend
+        except TypeError:
+            continue
+        cycles_prefs.get_devices()
+
+        gpu_count = 0
+        for device in cycles_prefs.devices:
+            use_gpu = getattr(device, 'type', '') != 'CPU'
+            device.use = use_gpu
+            if use_gpu:
+                gpu_count += 1
+
+        if gpu_count > 0:
+            selected_backend = backend
+            selected_gpu_count = gpu_count
+            break
+
+    # Fallback to CPU if no GPU device is available.
+    if selected_gpu_count == 0:
+        cycles_prefs.compute_device_type = 'NONE'
+        cycles_prefs.get_devices()
+        for device in cycles_prefs.devices:
+            device.use = True
+
+    print(f"[INFO] Cycles backend={selected_backend}, gpu_devices={selected_gpu_count}")
+    return selected_backend
+
 def init_render(engine='CYCLES', resolution=512, geo_mode=False):
     bpy.context.scene.render.engine = engine
     bpy.context.scene.render.resolution_x = resolution
@@ -41,6 +79,7 @@ def init_render(engine='CYCLES', resolution=512, geo_mode=False):
     bpy.context.scene.render.image_settings.file_format = 'PNG'
     bpy.context.scene.render.image_settings.color_mode = 'RGBA'
     bpy.context.scene.render.film_transparent = True
+    bpy.context.scene.render.use_persistent_data = True
     
     bpy.context.scene.cycles.device = 'GPU'
     bpy.context.scene.cycles.samples = 128 if not geo_mode else 1
@@ -51,9 +90,13 @@ def init_render(engine='CYCLES', resolution=512, geo_mode=False):
     bpy.context.scene.cycles.transparent_max_bounces = 3 if not geo_mode else 0
     bpy.context.scene.cycles.transmission_bounces = 3 if not geo_mode else 1
     bpy.context.scene.cycles.use_denoising = True
-        
-    bpy.context.preferences.addons['cycles'].preferences.get_devices()
-    bpy.context.preferences.addons['cycles'].preferences.compute_device_type = 'CUDA'
+    bpy.context.scene.cycles.use_adaptive_sampling = True
+
+    backend = _configure_cycles_devices()
+    if backend == 'OPTIX' and hasattr(bpy.context.scene.cycles, 'denoiser'):
+        bpy.context.scene.cycles.denoiser = 'OPTIX'
+    elif hasattr(bpy.context.scene.cycles, 'denoiser'):
+        bpy.context.scene.cycles.denoiser = 'OPENIMAGEDENOISE'
     
 def init_nodes(save_depth=False, save_normal=False, save_albedo=False, save_mist=False):
     if not any([save_depth, save_normal, save_albedo, save_mist]):
@@ -207,6 +250,22 @@ def init_lighting():
         "top_light": top_light,
         "bottom_light": bottom_light
     }
+
+def _foreground_black_pixel_ratio(image_path: str, black_rgb_threshold: float) -> float:
+    """Returns near-black ratio on valid foreground pixels (alpha > 0.01)."""
+    img = bpy.data.images.load(image_path, check_existing=False)
+    pixels = np.array(img.pixels[:], dtype=np.float32).reshape(-1, 4)
+    bpy.data.images.remove(img)
+
+    alpha = pixels[:, 3]
+    fg_mask = alpha > 0.01
+    if not np.any(fg_mask):
+        # No visible foreground: treat as fully black/invalid.
+        return 1.0
+
+    rgb = pixels[fg_mask, :3]
+    black_mask = np.max(rgb, axis=1) <= black_rgb_threshold
+    return float(np.mean(black_mask))
 
 
 def load_object(object_path: str) -> None:
@@ -471,9 +530,37 @@ def main(arg):
         for name, output in outputs.items():
             output.file_slots[0].path = os.path.join(arg.output_folder, f'{i:03d}_{name}')
             
-        # Render the scene
-        bpy.ops.render.render(write_still=True)
-        bpy.context.view_layer.update()
+        # Render the scene with optional re-tries for too many black foreground pixels.
+        image_path = bpy.context.scene.render.filepath
+        max_attempts = max(1, arg.max_black_rerender + 1)
+        for attempt in range(max_attempts):
+            bpy.ops.render.render(write_still=True)
+            bpy.context.view_layer.update()
+
+            if not arg.rerender_on_black_pixels:
+                break
+
+            black_ratio = _foreground_black_pixel_ratio(image_path, arg.black_rgb_threshold)
+            if black_ratio >= arg.black_pixel_ratio_threshold:
+                if attempt < max_attempts - 1:
+                    print(
+                        f"[WARN] Re-render view={i:03d}, attempt={attempt + 1}/{max_attempts}, "
+                        f"fg_black_ratio={black_ratio:.5f}, ratio_threshold={arg.black_pixel_ratio_threshold:.5f}, "
+                        f"rgb_threshold={arg.black_rgb_threshold:.5f}"
+                    )
+                    continue
+                print(
+                    f"[WARN] Re-render limit reached at view={i:03d}, "
+                    f"fg_black_ratio={black_ratio:.5f}, ratio_threshold={arg.black_pixel_ratio_threshold:.5f}, "
+                    f"rgb_threshold={arg.black_rgb_threshold:.5f}"
+                )
+                if arg.fail_on_black_pixels:
+                    raise RuntimeError(
+                        f"Too many black foreground pixels at view={i:03d}: "
+                        f"ratio={black_ratio:.5f}, ratio_threshold={arg.black_pixel_ratio_threshold:.5f}, "
+                        f"rgb_threshold={arg.black_rgb_threshold:.5f}"
+                    )
+            break
         for name, output in outputs.items():
             ext = EXT[output.format.file_format]
             path = glob.glob(f'{output.file_slots[0].path}*.{ext}')[0]
@@ -521,6 +608,11 @@ if __name__ == '__main__':
     parser.add_argument('--save_mist', action='store_true', help='Save the mist distance maps.')
     parser.add_argument('--split_normal', action='store_true', help='Split the normals of the mesh.')
     parser.add_argument('--save_mesh', action='store_true', help='Save the mesh as a .ply file.')
+    parser.add_argument('--rerender_on_black_pixels', action='store_true', help='Re-render when foreground black pixel ratio is too high.')
+    parser.add_argument('--black_pixel_ratio_threshold', type=float, default=0.2, help='Foreground black ratio threshold to trigger re-render.')
+    parser.add_argument('--black_rgb_threshold', type=float, default=0.02, help='Foreground pixel is treated as black when max(R,G,B) <= this value.')
+    parser.add_argument('--max_black_rerender', type=int, default=2, help='Maximum number of extra render attempts per view.')
+    parser.add_argument('--fail_on_black_pixels', action='store_true', help='Fail the object render if threshold is still exceeded after max retries.')
     argv = sys.argv[sys.argv.index("--") + 1:]
     args = parser.parse_args(argv)
 

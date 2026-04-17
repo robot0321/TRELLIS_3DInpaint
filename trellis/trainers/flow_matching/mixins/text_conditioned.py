@@ -26,7 +26,10 @@ class TextConditionedMixin:
         # load model
         with dist_utils.local_master_first():
             model = CLIPTextModel.from_pretrained(self.text_cond_model_name)
-            tokenizer = AutoTokenizer.from_pretrained(self.text_cond_model_name)
+            tokenizer = AutoTokenizer.from_pretrained(
+                self.text_cond_model_name,
+                clean_up_tokenization_spaces=False,
+            )
         model.eval()
         model = model.cuda()
         self.text_cond_model = {

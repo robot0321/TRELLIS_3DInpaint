@@ -41,3 +41,26 @@ def sphere_hammersley_sequence(n, num_samples, offset=(0, 0)):
     theta = np.arccos(1 - 2 * u) - np.pi / 2
     phi = v * 2 * np.pi
     return [phi, theta]
+
+
+def upper_hemisphere_hammersley_sequence(n, num_samples, offset=(0, 0)):
+    u, v = hammersley_sequence(2, n, num_samples)
+
+    u = (u + offset[0] / num_samples) % 1.0
+    v = (v + offset[1]) % 1.0
+
+    # 핵심 변경
+    theta = np.arccos(u)        # [0, pi/2]
+    phi = 2 * np.pi * v
+
+    return [phi, theta]
+
+def hemisphere_fibonacci(i, N):
+    # z를 균등(면적 균등)하게
+    z = (i + 0.5) / N              # in (0,1)
+    theta = np.arccos(z)
+
+    # golden angle로 phi를 배치 (규칙적이지만 “덜 격자”)
+    golden = (1 + 5**0.5) / 2
+    phi = 2 * np.pi * ((i / golden) % 1.0)
+    return phi, theta

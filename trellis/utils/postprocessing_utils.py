@@ -338,7 +338,7 @@ def bake_texture(
         texture[mask] /= texture_weights[mask][:, None]
         texture = np.clip(texture.reshape(texture_size, texture_size, 3).cpu().numpy() * 255, 0, 255).astype(np.uint8)
 
-        # inpaint
+        # texture hole fill
         mask = (texture_weights == 0).cpu().numpy().astype(np.uint8).reshape(texture_size, texture_size)
         texture = cv2.inpaint(texture, mask, 3, cv2.INPAINT_TELEA)
 

@@ -9,7 +9,7 @@ from easydict import EasyDict as edict
 from functools import partial
 from subprocess import DEVNULL, call
 import numpy as np
-from utils import sphere_hammersley_sequence
+from utils import sphere_hammersley_sequence, upper_hemisphere_hammersley_sequence, hemisphere_fibonacci
 
 
 BLENDER_LINK = 'https://download.blender.org/release/Blender3.0/blender-3.0.1-linux-x64.tar.xz'
@@ -24,17 +24,41 @@ def _install_blender():
         os.system(f'tar -xvf {BLENDER_INSTALLATION_PATH}/blender-3.0.1-linux-x64.tar.xz -C {BLENDER_INSTALLATION_PATH}')
 
 
-def _render(file_path, sha256, output_dir, num_views):
+def _render(
+    file_path,
+    sha256,
+    output_dir,
+    num_views,
+    ishemisphere=False,
+    black_pixel_ratio_threshold=0.2,
+    black_rgb_threshold=0.02,
+    max_black_rerender=2,
+    fail_on_black_pixels=False,
+    view_distribution="hammersley",
+):
     output_folder = os.path.join(output_dir, 'renders', sha256)
     
     # Build camera {yaw, pitch, radius, fov}
     yaws = []
     pitchs = []
-    offset = (np.random.rand(), np.random.rand())
-    for i in range(num_views):
-        y, p = sphere_hammersley_sequence(i, num_views, offset)
-        yaws.append(y)
-        pitchs.append(p)
+    if view_distribution == "hemisphere_fibonacci":
+        for i in range(num_views):
+            y, p = hemisphere_fibonacci(i, num_views)
+            yaws.append(y)
+            pitchs.append(p)
+    else:
+        offset = (np.random.rand(), np.random.rand())
+        for i in range(num_views):
+            y, p = sphere_hammersley_sequence(i, num_views, offset)
+            if ishemisphere:
+                if p > 0:
+                    yaws.append(y)
+                    pitchs.append(p)
+            else: # default
+                yaws.append(y)
+                pitchs.append(p)
+    num_views = len(pitchs)
+            
     radius = [2] * num_views
     fov = [40 / 180 * np.pi] * num_views
     views = [{'yaw': y, 'pitch': p, 'radius': r, 'fov': f} for y, p, r, f in zip(yaws, pitchs, radius, fov)]
@@ -49,6 +73,15 @@ def _render(file_path, sha256, output_dir, num_views):
         '--engine', 'CYCLES',
         '--save_mesh',
     ]
+    if True:# rerender_on_black_pixels:
+        args.extend([
+            '--rerender_on_black_pixels',
+            '--black_pixel_ratio_threshold', str(black_pixel_ratio_threshold),
+            '--black_rgb_threshold', str(black_rgb_threshold),
+            '--max_black_rerender', str(max_black_rerender),
+        ])
+    if fail_on_black_pixels:
+        args.append('--fail_on_black_pixels')
     if file_path.endswith('.blend'):
         args.insert(1, file_path)
     
@@ -70,6 +103,20 @@ if __name__ == '__main__':
                         help='Instances to process')
     parser.add_argument('--num_views', type=int, default=150,
                         help='Number of views to render')
+    parser.add_argument('--hemisphere', action='store_true')
+    parser.add_argument('--view_distribution', type=str, default='hammersley',
+                        choices=['hammersley', 'hemisphere_fibonacci'],
+                        help='Camera sampling distribution.')
+    # parser.add_argument('--rerender_on_black_pixels', action='store_true',
+    #                     help='Re-render when foreground black pixel ratio is too high.')
+    parser.add_argument('--black_pixel_ratio_threshold', type=float, default=0.2,
+                        help='Foreground black ratio threshold to trigger re-render.')
+    parser.add_argument('--black_rgb_threshold', type=float, default=0.02,
+                        help='Foreground pixel is treated as black when max(R,G,B) <= this value.')
+    parser.add_argument('--max_black_rerender', type=int, default=2,
+                        help='Maximum number of extra render attempts per view.')
+    parser.add_argument('--fail_on_black_pixels', action='store_true',
+                        help='Fail object render if threshold is still exceeded after retries.')
     dataset_utils.add_args(parser)
     parser.add_argument('--rank', type=int, default=0)
     parser.add_argument('--world_size', type=int, default=1)
@@ -115,7 +162,17 @@ if __name__ == '__main__':
     print(f'Processing {len(metadata)} objects...')
 
     # process objects
-    func = partial(_render, output_dir=opt.output_dir, num_views=opt.num_views)
+    func = partial(
+        _render,
+        output_dir=opt.output_dir,
+        num_views=opt.num_views,
+        ishemisphere=opt.hemisphere,
+        black_pixel_ratio_threshold=opt.black_pixel_ratio_threshold,
+        black_rgb_threshold=opt.black_rgb_threshold,
+        max_black_rerender=opt.max_black_rerender,
+        fail_on_black_pixels=opt.fail_on_black_pixels,
+        view_distribution=opt.view_distribution,
+    )
     rendered = dataset_utils.foreach_instance(metadata, opt.output_dir, func, max_workers=opt.max_workers, desc='Rendering objects')
     rendered = pd.concat([rendered, pd.DataFrame.from_records(records)])
     rendered.to_csv(os.path.join(opt.output_dir, f'rendered_{opt.rank}.csv'), index=False)

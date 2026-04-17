@@ -28,3 +28,15 @@ def sphere_hammersley_sequence(n, num_samples, offset=(0, 0), remap=False):
     theta = np.arccos(1 - 2 * u) - np.pi / 2
     phi = v * 2 * np.pi
     return [phi, theta]
+
+
+def hemisphere_fibonacci_sequence(i, num_samples):
+    """
+    Uniform(ish) camera sampling on upper hemisphere via Fibonacci spiral.
+    Returns (yaw, pitch) where pitch is in [0, pi/2].
+    """
+    z = (i + 0.5) / num_samples
+    pitch = np.arccos(z)
+    golden = (1.0 + 5.0 ** 0.5) / 2.0
+    yaw = 2.0 * np.pi * ((i / golden) % 1.0)
+    return [yaw, pitch]
